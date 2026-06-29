@@ -65,7 +65,7 @@ flowchart TD
 
 ## 출력 결과
 
-> 📸 *스크린샷 위치: 생성된 엑셀 파일 캡처 및 실행 로그 캡처를 여기에 첨부*
+
 ![엑셀 출력 예시](docs/excel_output_1.png)
 ![엑셀 출력 예시](docs/excel_output_2.png)
 ![엑셀 출력 예시](docs/excel_output_3.png)
