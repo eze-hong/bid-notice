@@ -310,14 +310,14 @@ def write_no_data(ws: Worksheet, start_row: int, merge_cols: int = 5) -> None:
     cell.alignment = Alignment(horizontal="center", vertical="center")
     cell.fill      = PatternFill()
     cell.border    = Border()
-    
+
+
 def notify_teams(title: str, msg: str) -> None:
     if not CFG.teams_webhook_url:
         logger.warning("Teams Webhook URL 미설정")
         return
     
     try:
-        #payload = { "text": f"**{title}**\n\n{msg}" }
         payload = {
             "@type": "MessageCard",
             "@content": "http://schema.org/extensions",
@@ -787,9 +787,11 @@ def run() -> None:
         
     except requests.RequestException as e:
         logger.error(f"네트워크 오류: {e}")
+        notify_teams("🚨 나라장터 배치 실패 (네트워크)", str(e))
         raise
     except Exception as e:
         logger.critical(f"예기치 못한 오류: {e}", exc_info=True)
+        notify_teams("🚨 나라장터 배치 실패 (예기치 못한 오류)", str(e))
         raise
 
 
@@ -809,8 +811,4 @@ if __name__ == "__main__":
     # 오전 8시 1회 실행
     run()
     
-    notify_teams(
-        "🧪 Teams Webhook 테스트",
-        "Python에서 테스트 메시지를 정상적으로 전송했습니다."
-    )
     

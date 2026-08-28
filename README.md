@@ -31,36 +31,40 @@ flowchart TD
     E --> G[나라장터 Open API 호출]
     F --> G
 
-    G --> G1[입찰공고\ngetBidPblancListInfoServc]
-    G --> G2[사전규격공개\ngetPublicPrcureThngInfoServcPPSSrch]
-    G --> G3[발주계획\ngetOrderPlanSttusListServcPPSSrch]
+    G --> G1[입찰공고]
+    G --> G2[사전규격공개]
+    G --> G3[발주계획]
 
-    G1 --> H1[XML 파싱 + 페이지네이션\n페이지당 50건 자동 순회]
-    G2 --> H2[XML 파싱 + 페이지네이션]
-    G3 --> H3[XML 파싱 + 페이지네이션]
+    G1 --> H[fetch_all_pages\nXML 파싱 + 페이지네이션]
+    G2 --> H
+    G3 --> H
 
-    H1 --> I1[필터링\n수요기관 11개 · 업무구분 2종]
-    H2 --> I2[필터링]
-    H3 --> I3[필터링]
+    subgraph RETRY[페이지별 재시도 로직 - 공통]
+        direction TB
+        R1[요청 시도] --> R2{성공?}
+        R2 -->|Yes| R3[item 수집]
+        R2 -->|No, 최대 3회 재시도| R4{1페이지?}
+        R4 -->|Yes| R5[RuntimeError\n전체 중단]
+        R4 -->|No| R6[failed_pages 기록\n다음 페이지 계속 진행]
+    end
 
-    I1 --> J1[중복 제거\n동일 공고번호 → 최신 차수만 유지]
-    I2 --> J2[중복 제거\nbfSpecRgstNo 기준]
-    I3 --> J3[중복 제거\norderPlanUntyNo 기준]
+    H --> RETRY
+    RETRY --> I1[필터링 · 중복제거]
 
-    J1 --> K[pandas DataFrame 변환]
-    J2 --> K
-    J3 --> K
-
+    I1 --> K[pandas DataFrame 변환]
     K --> L[atomic write\n임시 파일 저장 후 원자적 교체]
-    L --> M[(네트워크 드라이브\n\\10.x.x.x\pub\입찰공고관리)]
+    L --> M[(네트워크 드라이브)]
 
-    M --> N1[01.입찰공고목록_YYYYMMDD_HHMM.xlsx]
-    M --> N2[02.발주목록_사전규격공개_YYYYMMDD_HHMM.xlsx]
-    M --> N3[03.발주목록_발주계획_YYYYMMDD_HHMM.xlsx]
+    M --> N1[01.입찰공고목록]
+    M --> N2[02.사전규격]
+    M --> N3[03.발주계획]
 
-    C --> LOG[실행 로그\nC:\bid_notice\logs\YYYYMM\]
+    K --> S{failed_pages 있음?}
+    S -->|Yes| T[Teams 알림 발송]
+    S -->|No| U[정상 완료]
+
+    C --> LOG[실행 로그]
 ```
-
 ---
 
 ## 출력 결과
@@ -92,7 +96,8 @@ flowchart TD
 ## 주요 구현 포인트
 
 ### 최신 차수 유지 로직
-입찰공고는 변경·취소 시 동일 공고번호로 차수가 올라갑니다. 동일 `bidNtceNo`에 대해 가장 높은 `bidNtceOrd`(차수)만 남겨 항상 최신 상태를 반영합니다.
+입찰공고는 변경·취소 시 동일 공고번호로 차수가 올라감. 
+동일 `bidNtceNo`에 대해 가장 높은 `bidNtceOrd`(차수)만 남겨 항상 최신 상태를 반영.
 
 ### atomic write로 파일 손상 방지
 저장 중 프로세스 중단 시 불완전한 파일이 남는 문제를 방지합니다. 임시 파일에 완전히 쓴 뒤 `os.replace()`로 원자적 교체하며, 실패 시 임시 파일을 자동 삭제합니다.
@@ -113,11 +118,22 @@ def atomic_write(target_path: Path):
 ### 페이지네이션 최적화
 기존 구현은 총 페이지 수 파악을 위해 1페이지를 먼저 호출한 뒤 루프에서 1페이지부터 다시 순회해 API를 2회 호출했습니다. 첫 응답을 즉시 재사용하고 루프를 2페이지부터 시작해 불필요한 호출을 제거했습니다.
 
-### 데이터 유실 방지
-중간 페이지 수집 실패 시 기존 코드는 조용히 넘어가 불완전한 데이터가 저장됐습니다. 변경 후에는 `RuntimeError`로 상위에 전파해 데이터 유실을 즉시 감지합니다.
+<!--### 데이터 유실 방지
+중간 페이지 수집 실패 시 기존 코드는 조용히 넘어가 불완전한 데이터가 저장됐습니다. 
+변경 후에는 `RuntimeError`로 상위에 전파해 데이터 유실을 즉시 감지합니다.-->
+
 
 ### 설정값 외부화
 API 키, 네트워크 경로 등 민감한 설정을 `.env`로 분리하고, `frozen=True` 데이터클래스로 불변 설정 객체를 구성했습니다.
+
+### 재시도 & 부분실패 처리 로직
+페이지 별 최대 3회 재시도. 
+재시도 소진 시, 1페이지는 전체 중단하고 2페이지부터 failed_pages에 기록 후, 다음 페이지 진행.
+실패 페이지는 엑셀 메타 정보에 주의로 표시.
+
+### Teams 알림 연동
+실행 중 한 페이지라도 실패 시 Teams webhook 알림.
+미처리 예외 시에도 알림.
 
 ---
 
@@ -130,7 +146,7 @@ API 키, 네트워크 경로 등 민감한 설정을 `.env`로 분리하고, `fr
 | API 키 관리 | 소스코드 하드코딩 | `.env` 분리 |
 | 설정값 관리 | 전역 변수 분산 | `Config` 데이터클래스 통합 |
 | 1페이지 API 호출 | 2회 중복 | 1회로 통합 |
-| 중간 페이지 오류 | 조용히 무시 | `RuntimeError` 전파 |
+| 중간 페이지 오류 | 조용히 무시 | `재시도 3회` 후 실패 페이지 기록, 알림 |
 | 파일 저장 방식 | 직접 덮어쓰기 | `atomic write` |
 | 열 파싱 | `chr(ord(col) + 1)` — 두 자리 열 오작동 | `openpyxl` 공식 함수 |
 | 빈 데이터 처리 | 빈 시트 그대로 저장 | "조회된 데이터 없음" 안내 |
@@ -151,7 +167,7 @@ API 키, 네트워크 경로 등 민감한 설정을 `.env`로 분리하고, `fr
 | 엑셀 생성 | `openpyxl` | 스타일링 포함 xlsx 생성 |
 | 환경 변수 | `python-dotenv` | API 키, 경로 외부화 |
 | 월 계산 | `python-dateutil` | `relativedelta` 기반 발주시기 계산 |
-| 스케줄링 | Windows Task Scheduler | 매일 오전 8시 자동 실행 |
+| 스케줄링 | `Windows Task Scheduler` | 매일 오전 8시 자동 실행 |
 
 ---
 
@@ -162,7 +178,8 @@ API 키, 네트워크 경로 등 민감한 설정을 `.env`로 분리하고, `fr
 ```
 # C:\bid_notice\.env
 SERVICE_KEY=나라장터_API_서비스키
-OUTPUT_DIR=\\서버경로\출력디렉토리
+OUTPUT_DIR=\\서버경로\출력디렉토리 
+TEAMS_WEBHOOK_URL=팀스 웹훅 ULR
 ```
 
 ### 2. 패키지 설치
