@@ -3,3 +3,4 @@ logs/
 output/
 __pycache__/
 *.pyc
+날짜변경해서 테스트하면 원복 꼭 & bat 원복.txt
